@@ -21,8 +21,8 @@ loop appState = do
       commandNotFound = do
         putStrLn "Command not found."
         return appState
-    appState <- fromMaybe commandNotFound mCommandFound
-    loop appState
+    newAppState <- fromMaybe commandNotFound mCommandFound
+    loop newAppState
 ```
 It reads a single line from standard input, binds it to the variable `command` and checks whether it received the word "quit".
 If yes, the app terminates. Otherwise, it attempts to `parse` the input into a `Command`.

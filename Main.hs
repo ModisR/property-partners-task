@@ -1,13 +1,18 @@
 import Data.Maybe
 import Data.List
+import Data.Time.Clock
 
 main :: IO ()
 main = do
   putIntro
+  time <- getCurrentTime
+  let
+    nick = User "Nick" [Message "Hi, everybody!" time] []
+    pika = User "Pikachu" [Message "Pika" time, Message "Pika Pika" time, Message "Pikachuuuu!" time] []
   loop [
-    User "Kenobi" ["Hello there!", "If you strike me down, I shall become more powerful than you can possibly imagine."] [],
-    User "Nick" ["Hi, everybody!"] []
-    ]
+    User "Kenobi" [Message "Hello there!" time, Message "You were my brother, Annakin!" time] [nick, pika],
+    pika,
+    nick]
 
 loop :: [User] -> IO ()
 loop appState = do
@@ -29,7 +34,7 @@ apply :: [User] -> Command -> IO [User]
 apply appState (Read username) = do
   let
     mUser = findUser username appState
-    mOutput = fmap (putLines . messages) mUser
+    mOutput = fmap (putLines . map show . messages) mUser
   fromMaybe (putStrLn "User not found.") mOutput
   return appState
   
@@ -37,42 +42,44 @@ apply appState (Post username message) = do
   let
     newUser = User username [] []
     user = fromMaybe newUser $ findUser username appState
-  setUser appState $ User username (message : messages user) (followers user)
+  message <- fmap (Message message) getCurrentTime
+  setUser (User username (message : messages user) (followees user)) appState
 
 apply appState (Follow followerName followeeName) = do
   let
-    mNewFollowee = do
+    mNewFollower = do
       follower <- findUser followerName appState
       followee <- findUser followeeName appState
-      return $ User (name followee) (messages followee) (followerName : followers followee)
+      return $ User (name follower) (messages follower) (followee : followees follower)
     usersNotFound = do
       putStrLn "One or more of the specified users were not found."
       return appState 
-    mNewAppState = fmap (setUser appState) mNewFollowee
+    mNewAppState = fmap (`setUser` appState) mNewFollower
   fromMaybe usersNotFound mNewAppState
 
 apply appState (Wall userName) = do
   let
-    postsOf uname = fromMaybe [] $ fmap messages $ findUser uname appState
-    wallOf user = concat (messages user : map postsOf (followers user))
+    postsOf user = map (\msg -> name user ++ " - " ++ show msg ) (messages user)
+    wallOf user = concat (map show (messages user) : map postsOf (followees user))
     mOutput = fmap (putLines . wallOf) $ findUser userName appState
   fromMaybe (putStrLn "User not found.") mOutput
   return appState
 
 
-setUser :: [User] -> User -> IO [User]
-setUser appState user = return $
+setUser :: User -> [User] -> IO [User]
+setUser user appState = return $
   user : filter (\u -> name u /= name user) appState
 
 findUser :: String -> [User] -> Maybe User
-findUser username = find (\user -> name user == username)
+findUser username = find $ (\u -> username == name u)
+
 
 parse :: String -> Maybe Command
 parse = process . words
   where
     process [username] = Just $ Read username
     process (username : "->" : message) = Just $ Post username $ unwords message
-    process [follower, "follows", followee] = Just $ Follow follower follower
+    process [follower, "follows", followee] = Just $ Follow follower followee
     process [username, "wall"] = Just $ Wall username
     process _ = Nothing
 
@@ -86,20 +93,22 @@ putIntro = putLines [
   "Follow: <user> follows <other user>",
   "Wall: <user> wall",
   "Quit: quit",
-  "-----"
-  ]
+  "-----"]
 
 putLines :: [String] -> IO ()
-putLines lines = do
-  sequence $ map putStrLn lines
-  return ()
+putLines = mapM_ putStrLn
 
+data User = User { name :: Username, messages :: [Message], followees :: [User] } deriving Show
 
-data User = User { name :: String, messages :: [String], followers :: [String] }
-  deriving Show
+data Message = Message { body :: String, time :: UTCTime }
+
+instance Show Message where
+  show msg = body msg ++ " (" ++ show (time msg) ++ ")"
 
 data Command =
-  Post String String |
-  Read String |
-  Follow String String |
-  Wall String
+  Post Username String |
+  Read Username |
+  Follow Username Username |
+  Wall Username
+
+type Username = String
