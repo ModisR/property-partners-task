@@ -3,66 +3,72 @@ import Data.List
 import Data.Time.Clock
 
 main :: IO ()
-main = do
-  putIntro
-  time <- getCurrentTime
-  let
-    nick = User "Nick" [Message "Hi, everybody!" time] []
-    pika = User "Pikachu" [Message "Pika" time, Message "Pika Pika" time, Message "Pikachuuuu!" time] []
-  loop [
-    User "Kenobi" [Message "Hello there!" time, Message "You were my brother, Annakin!" time] [nick, pika],
-    pika,
-    nick]
+main = putIntro >> loop []
 
 loop :: [User] -> IO ()
 loop appState = do
-  command <- getLine
-  if command == "quit"
+  line <- getLine
+  if line == "quit"
     then putStrLn "Exiting. Good bye!"
     else do
     let
-      mCommandFound = fmap (apply appState) (parse command)
-      commandNotFound = do
+      execute Nothing = do
         putStrLn "Command not found."
         return appState
-    newState <- fromMaybe commandNotFound mCommandFound
-    putStrLn $ show newState
-    loop newState
+      execute (Just command) = apply command appState
+    newAppState <- execute $ parse line
+    loop newAppState
 
 
-apply :: [User] -> Command -> IO [User]
-apply appState (Read username) = do
+apply :: Command -> [User] -> IO [User]
+apply (Read username) appState = do
   let
-    mUser = findUser username appState
-    mOutput = fmap (putLines . map show . messages) mUser
-  fromMaybe (putStrLn "User not found.") mOutput
+    viewPostsOf Nothing = putNotFound username
+    viewPostsOf (Just user) = putLines $ map show $ messages user
+  viewPostsOf $ findUser username appState
   return appState
   
-apply appState (Post username message) = do
+apply (Post username message) appState = do
+  time <- getCurrentTime
   let
+    msg = Message message time 
     newUser = User username [] []
     user = fromMaybe newUser $ findUser username appState
-  message <- fmap (Message message) getCurrentTime
-  setUser (User username (message : messages user) (followees user)) appState
+  setUser (User username (msg : messages user) (followees user)) appState
 
-apply appState (Follow followerName followeeName) = do
-  let
-    mNewFollower = do
-      follower <- findUser followerName appState
-      followee <- findUser followeeName appState
-      return $ User (name follower) (messages follower) (followee : followees follower)
-    usersNotFound = do
-      putStrLn "One or more of the specified users were not found."
-      return appState 
-    mNewAppState = fmap (`setUser` appState) mNewFollower
-  fromMaybe usersNotFound mNewAppState
+apply (Follow followerName followeeName) appState =
+  addFollowing (findUser followerName appState) (findUser followeeName appState)
+  where
+    addFollowing Nothing Nothing = do
+      putNotFound followerName
+      putNotFound followeeName
+      return appState
+    addFollowing Nothing _ = do
+      putNotFound followerName
+      return appState
+    addFollowing _ Nothing = do
+      putNotFound followeeName
+      return appState
+    addFollowing (Just follower) (Just followee) = setUser newFollower appState
+      where
+        newFollower = User (name follower) (messages follower) (followeeName : followees follower)
 
-apply appState (Wall userName) = do
+apply (Wall userName) appState = do
   let
-    postsOf user = map (\msg -> name user ++ " - " ++ show msg ) (messages user)
-    wallOf user = concat (map show (messages user) : map postsOf (followees user))
-    mOutput = fmap (putLines . wallOf) $ findUser userName appState
-  fromMaybe (putStrLn "User not found.") mOutput
+    putWallOf Nothing = putNotFound userName
+    putWallOf (Just user) = putLines wall
+      where
+        wall = map toString sortedMessages
+        toString (author, msg) = author ++ " - " ++ show msg
+        sortedMessages = reverse $ sortBy compareTimes messagesOnWall
+        compareTimes (_, msg1) (_, msg2) = compare (time msg1) (time msg2)
+        messagesOnWall = do
+          userOnWall <- usersOnWall
+          let addAuthor msg = (name userOnWall, msg)
+          map addAuthor $ messages userOnWall
+        usersOnWall = user : catMaybes followeeMaybes
+        followeeMaybes = map (`findUser` appState) (followees user)
+  putWallOf $ findUser userName appState
   return appState
 
 
@@ -70,7 +76,7 @@ setUser :: User -> [User] -> IO [User]
 setUser user appState = return $
   user : filter (\u -> name u /= name user) appState
 
-findUser :: String -> [User] -> Maybe User
+findUser :: Username -> [User] -> Maybe User
 findUser username = find $ (\u -> username == name u)
 
 
@@ -83,6 +89,9 @@ parse = process . words
     process [username, "wall"] = Just $ Wall username
     process _ = Nothing
 
+
+putNotFound :: Username -> IO ()
+putNotFound username = putStrLn $ "User " ++ username ++ " not found."
 
 putIntro :: IO ()
 putIntro = putLines [
@@ -98,12 +107,12 @@ putIntro = putLines [
 putLines :: [String] -> IO ()
 putLines = mapM_ putStrLn
 
-data User = User { name :: Username, messages :: [Message], followees :: [User] } deriving Show
+data User = User { name :: Username, messages :: [Message], followees :: [Username] }
 
 data Message = Message { body :: String, time :: UTCTime }
 
 instance Show Message where
-  show msg = body msg ++ " (" ++ show (time msg) ++ ")"
+  show (Message body time) = body ++ "    (" ++ show time ++ ")"
 
 data Command =
   Post Username String |
